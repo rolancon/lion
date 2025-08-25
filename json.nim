@@ -189,7 +189,8 @@ type
     JInt,
     JFloat,
     JString,
-    Symbol
+    Symbol,
+    Keyword,
     JObject,
     JArray,
     SExpr
@@ -203,6 +204,8 @@ type
       str*: string
     of Symbol:
       sym*: string
+    of Keyword:
+      kw*: string
     of JInt:
       num*: BiggestInt
     of JFloat:
@@ -234,6 +237,10 @@ proc newJRawNumber(s: string): JsonNode =
 proc newSymbol*(s: string): JsonNode =
   ## Creates a new `Symbol JsonNode`.
   result = JsonNode(kind: Symbol, sym: s)
+
+proc newKeyword*(s: string): JsonNode =
+  ## Creates a new `Keyword JsonNode`.
+  result = JsonNode(kind: Keyword, kw: s)
 
 proc newJInt*(n: BiggestInt): JsonNode =
   ## Creates a new `JInt JsonNode`.
@@ -276,6 +283,13 @@ proc getSym*(n: JsonNode, default: string = ""): string =
   ## Returns `default` if `n` is not a `Symbol`, or if `n` is nil.
   if n.isNil or n.kind != Symbol: return default
   else: return n.sym
+
+proc getKw*(n: JsonNode, default: string = ""): string =
+  ## Retrieves the string value of a `Keyword JsonNode`.
+  ##
+  ## Returns `default` if `n` is not a `Keyword`, or if `n` is nil.
+  if n.isNil or n.kind != Keyword: return default
+  else: return n.kw
 
 proc getInt*(n: JsonNode, default: int = 0): int =
   ## Retrieves the int value of a `JInt JsonNode`.
@@ -497,6 +511,8 @@ proc `==`*(a, b: JsonNode): bool {.noSideEffect, raises: [].} =
       result = a.str == b.str
     of Symbol:
       result = a.sym == b.sym
+    of Keyword:
+      result = a.kw == b.kw
     of JInt:
       result = a.num == b.num
     of JFloat:
@@ -546,6 +562,8 @@ proc hash*(n: JsonNode): Hash {.noSideEffect.} =
     result = hash(n.str)
   of Symbol:
     result = hash(n.sym)
+  of Keyword:
+    result = hash(n.kw)
   of JNull:
     result = Hash(0)
 
@@ -695,6 +713,9 @@ proc copy*(p: JsonNode): JsonNode =
   of Symbol:
     result = newSymbol(p.sym)
     result.isUnquoted = p.isUnquoted
+  of Keyword:
+    result = newKeyword(p.kw)
+    result.isUnquoted = p.isUnquoted
   of JInt:
     result = newJInt(p.num)
   of JFloat:
@@ -801,6 +822,8 @@ proc toUgly*(result: var string, node: JsonNode) =
       escapeJson(node.str, result)
   of Symbol:
     result.add node.sym
+  of Keyword:
+    result.add node.kw
   of JInt:
     result.addInt(node.num)
   of JFloat:
@@ -839,6 +862,9 @@ proc toPretty(result: var string, node: JsonNode, indent = 2, ml = true,
     if lstArr: result.indent(currIndent)
     toUgly(result, node)
   of Symbol:
+    if lstArr: result.indent(currIndent)
+    toUgly(result, node)
+  of Keyword:
     if lstArr: result.indent(currIndent)
     toUgly(result, node)
   of JInt:
@@ -970,6 +996,15 @@ proc parseJson(p: var JsonParser; rawIntegers, rawFloats: bool, depth = 0): Json
       shallowCopy(result.sym, p.a)
       p.a = ""
     discard getTok(p)
+  of tkKeyword:
+    # we capture 'p.a' here, so we need to give it a fresh buffer afterwards:
+    when defined(gcArc) or defined(gcOrc) or defined(gcAtomicArc):
+      result = JsonNode(kind: Keyword, kw: move p.a)
+    else:
+      result = JsonNode(kind: Keyword)
+      shallowCopy(result.kw, p.a)
+      p.a = ""
+    discard getTok(p)
   of tkInt:
     if rawIntegers:
       result = newJRawNumber(p.a)
@@ -1077,95 +1112,22 @@ proc parseJson*(s: Stream, filename: string = ""; rawIntegers = false, rawFloats
   finally:
     p.close()
 
-when defined(js):
-  from std/math import `mod`
-  from std/jsffi import JsObject, `[]`, to
-  from std/private/jsutils import getProtoName, isInteger, isSafeInteger
+proc parseJson*(buffer: string; rawIntegers = false, rawFloats = false): JsonNode =
+  ## Parses JSON from `buffer`.
+  ## If `buffer` contains extra data, it will raise `JsonParsingError`.
+  ## If `rawIntegers` is true, integer literals will not be converted to a `JInt`
+  ## field but kept as raw numbers via `JString`.
+  ## If `rawFloats` is true, floating point literals will not be converted to a `JFloat`
+  ## field but kept as raw numbers via `JString`.
+  result = parseJson(newStringStream(buffer), "input", rawIntegers, rawFloats)
 
-  proc parseNativeJson(x: cstring): JsObject {.importjs: "JSON.parse(#)".}
-
-  proc getVarType(x: JsObject, isRawNumber: var bool): JsonNodeKind =
-    result = JNull
-    case $getProtoName(x) # TODO: Implicit returns fail here.
-    of "[object Array]": return JArray
-    of "[object Object]": return JObject
-    of "[object Number]":
-      if isInteger(x) and 1.0 / cast[float](x) != -Inf: # preserve -0.0 as float
-        if isSafeInteger(x):
-          return JInt
-        else:
-          isRawNumber = true
-          return JString
-      else:
-        return JFloat
-    of "[object Boolean]": return JBool
-    of "[object Null]": return JNull
-    of "[object String]": return JString
-    else: assert false
-
-  proc len(x: JsObject): int =
-    {.emit: """
-      `result` = `x`.length;
-    """.}
-
-  proc convertObject(x: JsObject): JsonNode =
-    var isRawNumber = false
-    case getVarType(x, isRawNumber)
-    of JArray:
-      result = newJArray()
-      for i in 0 ..< x.len:
-        result.add(x[i].convertObject())
-    of JObject:
-      result = newJObject()
-      {.emit: """for (var property in `x`) {
-        if (`x`.hasOwnProperty(property)) {
-      """.}
-
-      var nimProperty: cstring
-      var nimValue: JsObject
-      {.emit: "`nimProperty` = property; `nimValue` = `x`[property];".}
-      result[$nimProperty] = nimValue.convertObject()
-      {.emit: "}}".}
-    of JInt:
-      result = newJInt(x.to(int))
-    of JFloat:
-      result = newJFloat(x.to(float))
-    of JString:
-      # Dunno what to do with isUnquoted here
-      if isRawNumber:
-        var value: cstring
-        {.emit: "`value` = `x`.toString();".}
-        result = newJRawNumber($value)
-      else:
-        result = newJString($x.to(cstring))
-    of JBool:
-      result = newJBool(x.to(bool))
-    of JNull:
-      result = newJNull()
-
-  proc parseJson*(buffer: string): JsonNode =
-    when nimvm:
-      return parseJson(newStringStream(buffer), "input")
-    else:
-      return parseNativeJson(buffer).convertObject()
-
-else:
-  proc parseJson*(buffer: string; rawIntegers = false, rawFloats = false): JsonNode =
-    ## Parses JSON from `buffer`.
-    ## If `buffer` contains extra data, it will raise `JsonParsingError`.
-    ## If `rawIntegers` is true, integer literals will not be converted to a `JInt`
-    ## field but kept as raw numbers via `JString`.
-    ## If `rawFloats` is true, floating point literals will not be converted to a `JFloat`
-    ## field but kept as raw numbers via `JString`.
-    result = parseJson(newStringStream(buffer), "input", rawIntegers, rawFloats)
-
-  proc parseFile*(filename: string): JsonNode =
-    ## Parses `file` into a `JsonNode`.
-    ## If `file` contains extra data, it will raise `JsonParsingError`.
-    var stream = newFileStream(filename, fmRead)
-    if stream == nil:
-      raise newException(IOError, "cannot read from file: " & filename)
-    result = parseJson(stream, filename, rawIntegers=false, rawFloats=false)
+proc parseFile*(filename: string): JsonNode =
+  ## Parses `file` into a `JsonNode`.
+  ## If `file` contains extra data, it will raise `JsonParsingError`.
+  var stream = newFileStream(filename, fmRead)
+  if stream == nil:
+    raise newException(IOError, "cannot read from file: " & filename)
+  result = parseJson(stream, filename, rawIntegers=false, rawFloats=false)
 
 # -- Json deserialiser. --
 
@@ -1327,7 +1289,7 @@ proc initFromJson[T](dst: var Option[T]; jsonNode: JsonNode; jsonPath: var strin
     initFromJson(dst.get, jsonNode, jsonPath)
 
 macro assignDistinctImpl[T: distinct](dst: var T;jsonNode: JsonNode; jsonPath: var string) =
-  let typInst = getTypeInst(dst)
+  #let typInst = getTypeInst(dst)
   let typImpl = getTypeImpl(dst)
   let baseTyp = typImpl[0]
 
@@ -1492,7 +1454,7 @@ when false:
       Echo(x.errorMsg())
       break
     of jsonEof: break
-    of jsonString, sExprSymbol, jsonInt, jsonFloat: echo(x.str)
+    of jsonString, sExprSymbol, sExprKeyword, jsonInt, jsonFloat: echo(x.str)
     of jsonTrue: echo("!TRUE")
     of jsonFalse: echo("!FALSE")
     of jsonNull: echo("!NULL")

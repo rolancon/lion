@@ -162,6 +162,9 @@ proc swap_bang(xs: varargs[MalType]): MalType =
 proc time_ms(xs: varargs[MalType]): MalType =
   number int(epochTime() * 1000)
 
+proc version(xs: varargs[MalType]): MalType =
+  str "0.9"
+
 template wrapNumberFun(op): untyped =
   fun proc(xs: varargs[MalType]): MalType =
     number op(xs[0].number, xs[1].number)
@@ -243,4 +246,5 @@ let ns* = {
   "swap!": fun swap_bang,
 
   "time-ms": fun time_ms,
+  "version": fun version,
 }

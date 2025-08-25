@@ -23,6 +23,7 @@ type
     jsonEof,            ## end of file reached
     jsonString,         ## a string literal
     sExprSymbol,        ## a symbol literal
+    sExprKeyword,       ## a keyword literal
     jsonInt,            ## an integer literal
     jsonFloat,          ## a float literal
     jsonTrue,           ## the value `true`
@@ -41,6 +42,7 @@ type
     tkEof,
     tkString,
     tkSymbol,
+    tkKeyword,
     tkInt,
     tkFloat,
     tkTrue,
@@ -62,6 +64,7 @@ type
     errInvalidToken,      ## invalid token
     errStringExpected,    ## string expected
     errSymbolExpected,    ## symbol expected
+    errKeywordExpected,   ## keyword expected
     errColonExpected,     ## `:` expected
     errCommaExpected,     ## `,` expected
     errBracketRiExpected, ## `]` expected
@@ -95,6 +98,7 @@ const
     "invalid token",
     "string expected",
     "symbol expected",
+    "keyword expected",
     "':' expected",
     "',' expected",
     "']' expected",
@@ -110,6 +114,7 @@ const
     "EOF",
     "string literal",
     "symbol literal",
+    "keyword literal",
     "int literal",
     "float literal",
     "true",
@@ -139,7 +144,7 @@ proc close*(my: var JsonParser) {.inline.} =
 proc str*(my: JsonParser): string {.inline.} =
   ## returns the character data for the events: `jsonInt`, `jsonFloat`,
   ## `jsonString`, `sExprSymbol`
-  assert(my.kind in {jsonInt, jsonFloat, jsonString, sExprSymbol})
+  assert(my.kind in {jsonInt, jsonFloat, jsonString, sExprSymbol, sExprKeyword})
   return my.a
 
 proc getInt*(my: JsonParser): BiggestInt {.inline.} =
@@ -374,6 +379,18 @@ proc parseSymbol(my: var JsonParser) =
       inc(pos)
   my.bufpos = pos
 
+proc parseKeyword(my: var JsonParser) =
+  var pos = my.bufpos
+  if my.buf[pos] == ':':
+      add(my.a, ':')
+      inc(pos)
+  else: discard
+  if not (my.buf[pos] in ({'0'..'9'} + {'(', ')', '[', ']', '{', '}'})):
+    while not (my.buf[pos] in ({' '} + {'(', ')', '[', ']', '{', '}'})):
+      add(my.a, my.buf[pos])
+      inc(pos)
+  my.bufpos = pos
+
 proc getTok*(my: var JsonParser): TokKind =
   setLen(my.a, 0)
   skip(my) # skip whitespace, comments
@@ -411,26 +428,30 @@ proc getTok*(my: var JsonParser): TokKind =
     inc(my.bufpos)
     result = tkSpace
   of ':':
-    inc(my.bufpos)
-    result = tkColon
+    parseKeyword(my)
+    if my.a == ":":
+      result = tkColon
+    else:
+      result = tkKeyword
   of '\0':
     result = tkEof
-  of 'a'..'z', 'A'..'Z', '_':
+  of 'a'..'z', 'A'..'Z', '_', '*', '?', '!', '=', '+', '/', '<', '>':
     parseName(my)
     case my.a
     of "null": result = tkNull
     of "nil": result = tkNil
     of "true": result = tkTrue
     of "false": result = tkFalse
-    else: discard #result = tkError
-  #of {'!'..'~'}:
-  else:
-    parseSymbol(my)
-    if my.a == "":
-      inc(my.bufpos)
-      result = tkError
     else:
-      result = tkSymbol
+      parseSymbol(my)
+      if my.a == "":
+        inc(my.bufpos)
+        result = tkError
+      else:
+        result = tkSymbol
+  else:
+    inc(my.bufpos)
+    result = tkError
   my.tok = result
 
 proc next*(my: var JsonParser) =
@@ -514,7 +535,6 @@ proc next*(my: var JsonParser) =
       my.state.add(stateExpectSExprSpace) # expect value next!
       my.kind = JsonEventKind(ord(tk))
     of tkBracketLe:
-      #discard
       my.state.add(stateExpectArrayComma)
       my.state.add(stateArray)
       my.kind = jsonArrayStart
@@ -523,7 +543,6 @@ proc next*(my: var JsonParser) =
       my.state.add(stateSExpr)
       my.kind = sExprStart
     of tkCurlyLe:
-      #discard
       my.state.add(stateExpectArrayComma)
       my.state.add(stateObject)
       my.kind = jsonObjectStart

@@ -1,4 +1,4 @@
-import rdstdin, tables, sequtils, os, types, reader, printer, env, core
+import tables, sequtils, types, reader, printer, env, core
 
 proc read(str: string): MalType = str.read_str
 
@@ -32,7 +32,7 @@ proc quasiquote(ast: MalType): MalType =
 proc eval*(ast: MalType, env: Env): MalType =
   var ast = ast
   var env = env
-
+  
   while true:
 
     let dbgeval = env.get("DEBUG-EVAL")
