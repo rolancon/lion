@@ -165,7 +165,7 @@ runnableExamples:
     a1, a2, a0, a3, a4: int
   doAssert $(%* Foo()) == """{"a1":0,"a2":0,"a0":0,"a3":0,"a4":0}"""
 
-import std/[hashes, tables, strutils, lexbase, streams, macros] #, parsejson
+import std/[hashes, tables, strutils, lexbase, streams, macros]
 import parsejson
 
 import std/options # xxx remove this dependency using same approach as https://github.com/nim-lang/Nim/pull/14563
@@ -185,6 +185,7 @@ export
 type
   JsonNodeKind* = enum ## possible JSON node types
     JNull,
+    Nil,
     JBool,
     JInt,
     JFloat,
@@ -213,6 +214,8 @@ type
     of JBool:
       bval*: bool
     of JNull:
+      nil
+    of Nil:
       nil
     of JObject:
       fields*: OrderedTable[string, JsonNode]
@@ -257,6 +260,10 @@ proc newJBool*(b: bool): JsonNode =
 proc newJNull*(): JsonNode =
   ## Creates a new `JNull JsonNode`.
   result = JsonNode(kind: JNull)
+
+proc newNil*(): JsonNode =
+  ## Creates a new `Nil JsonNode`.
+  result = JsonNode(kind: Nil)
 
 proc newJObject*(): JsonNode =
   ## Creates a new `JObject JsonNode`
@@ -521,6 +528,8 @@ proc `==`*(a, b: JsonNode): bool {.noSideEffect, raises: [].} =
       result = a.bval == b.bval
     of JNull:
       result = true
+    of Nil:
+      result = true
     of JArray:
       {.cast(raises: []).}: # bug #19303
         result = a.elems == b.elems
@@ -565,6 +574,8 @@ proc hash*(n: JsonNode): Hash {.noSideEffect.} =
   of Keyword:
     result = hash(n.kw)
   of JNull:
+    result = Hash(0)
+  of Nil:
     result = Hash(0)
 
 proc hash*(n: OrderedTable[string, JsonNode]): Hash =
@@ -724,6 +735,8 @@ proc copy*(p: JsonNode): JsonNode =
     result = newJBool(p.bval)
   of JNull:
     result = newJNull()
+  of Nil:
+    result = newNil()
   of JObject:
     result = newJObject()
     for key, val in pairs(p.fields):
@@ -832,6 +845,8 @@ proc toUgly*(result: var string, node: JsonNode) =
     result.add(if node.bval: "true" else: "false")
   of JNull:
     result.add "null"
+  of Nil:
+    result.add "nil"
 
 proc toPretty(result: var string, node: JsonNode, indent = 2, ml = true,
               lstArr = false, currIndent = 0) =
@@ -893,14 +908,14 @@ proc toPretty(result: var string, node: JsonNode, indent = 2, ml = true,
     else: result.add("[]")
   of SExpr:
     if lstArr: result.indent(currIndent)
-    if len(node.elems) != 0:
+    if len(node.sexprs) != 0:
       result.add("(")
       result.nl(ml)
-      for i in 0..len(node.elems)-1:
+      for i in 0..len(node.sexprs)-1:
         if i > 0:
           result.add(" ")
           result.nl(ml) # New Line
-        toPretty(result, node.elems[i], indent, ml,
+        toPretty(result, node.sexprs[i], indent, ml,
             true, newIndent(currIndent, indent, ml))
       result.nl(ml)
       result.indent(currIndent)
@@ -909,6 +924,9 @@ proc toPretty(result: var string, node: JsonNode, indent = 2, ml = true,
   of JNull:
     if lstArr: result.indent(currIndent)
     result.add("null")
+  of Nil:
+    if lstArr: result.indent(currIndent)
+    result.add("nil")
 
 proc pretty*(node: JsonNode, indent = 2): string =
   ## Returns a JSON Representation of `node`, with indentation and
@@ -1033,7 +1051,7 @@ proc parseJson(p: var JsonParser; rawIntegers, rawFloats: bool, depth = 0): Json
     result = newJNull()
     discard getTok(p)
   of tkNil:
-    result = newJNull()
+    result = newNil()
     discard getTok(p)
   of tkCurlyLe:
     if depth > DepthLimit:

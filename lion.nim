@@ -1,4 +1,4 @@
-import rdstdin, sequtils, os
+import rdstdin, sequtils, tables, os
 import json, mal, types, reader, printer, env, core
 
 for k, v in ns.items:
@@ -16,12 +16,47 @@ if paramCount() >= 1:
   rep "(load-file \"" & paramStr(1) & "\")"
   quit()
 
+proc toStr(result: var string, node: JsonNode) =
+  case node.kind
+  of SExpr:
+    if len(node.sexprs) != 0:
+      result.add("(")
+      for i in 0..len(node.sexprs)-1:
+        if i > 0:
+          result.add(" ")
+        toStr(result, node.sexprs[i])
+      result.add(")")
+    else: result.add("())")
+  of JString:
+    toUgly(result, node)
+  of Symbol:
+    toUgly(result, node)
+  # of Keyword:
+  #   toUgly(result, node)
+  of JInt:
+    result.addInt(node.num)
+  of JBool:
+    result.add(if node.bval: "true" else: "false")
+  of Nil:
+    result.add("nil")
+  else: discard
+
+proc evalSExprs(node: JsonNode) =
+  var result: string
+  case node.kind
+  of SExpr:
+      result.toStr node
+      echo result.rep
+  of JObject:
+    for key, value in pairs(node.fields):
+      evalSExprs(value)
+  else: return
+
 while true:
   try:
     let line = readLineFromStdin("> ")
     var jsonNode = parseJson(line)
-    if jsonNode.kind == SExpr:
-        echo line.rep
+    evalSExprs(jsonNode)
   except Blank: discard
   except IOError: quit()
   except MalError:
